@@ -13,7 +13,7 @@ import traceback
 import wave
 
 from scripts.agent_config import (
-    load_config, _save_pil_to_tempfile,
+    load_config, _save_pil_to_tempfile, _save_original_copy,
     _REGISTRY_AVAILABLE, get_registered_tools, get_tool_function,
 )
 from scripts.agent_tools import TOOLS, TOOL_FUNCTIONS
@@ -145,6 +145,13 @@ def _execute_tool(tool_name, tool_args, uploaded_image=None, uploaded_video=None
             # 统一转为列表
             if not isinstance(images, list):
                 images = [images]
+            if tool_name in ("api_image_generate", "api_image_edit"):
+                _kind = "img2img" if tool_name == "api_image_edit" else "txt2img"
+                _saved = [p for p in (_save_original_copy(_img, _kind) for _img in images) if p]
+                if _saved:
+                    if isinstance(info, dict):
+                        info["original_saved"] = _saved
+                    print(f"[Agent] 未修改原图已另存 {len(_saved)} 张: {_saved[0]}")
             result_str = json.dumps({"status": "success", "info": info, "image_count": len(images)}, ensure_ascii=False)
             return result_str, images
 

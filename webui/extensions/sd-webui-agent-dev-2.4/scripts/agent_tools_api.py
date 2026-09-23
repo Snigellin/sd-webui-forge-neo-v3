@@ -18,6 +18,18 @@ from scripts.agent_config import load_config
 from scripts.agent_tools_common import _apply_ui_aspect_size, _uploaded_image_size
 
 
+def _to_pil(raw_bytes, mode=None):
+    """原始字节 -> PIL Image，并把原始字节挂在 img.info['raw_bytes'] 上。"""
+    img = Image.open(BytesIO(raw_bytes))
+    if mode:
+        img = img.convert(mode)
+    try:
+        img.info["raw_bytes"] = raw_bytes
+    except Exception:
+        pass
+    return img
+
+
 def api_image_edit_tool(image, instruction, model=None, size="auto", response_format="b64_json"):
     """使用外部/API 图像模型编辑图片。用户明确指定 API 图像模型时优先使用。"""
     try:
@@ -85,8 +97,7 @@ def api_image_edit_tool(image, instruction, model=None, size="auto", response_fo
             for b64_data in images_b64:
                 try:
                     img_data = base64.b64decode(b64_data)
-                    img = Image.open(BytesIO(img_data))
-                    images.append(img)
+                    images.append(_to_pil(img_data))
                 except Exception as e:
                     print(f"[Agent] Gemini 编辑图片解码失败: {e}")
             if images:
@@ -153,9 +164,9 @@ def api_image_edit_tool(image, instruction, model=None, size="auto", response_fo
                     if output:
                         if output.startswith("http"):
                             with urllib.request.urlopen(output, timeout=120) as image_resp:
-                                images.append(Image.open(BytesIO(image_resp.read())).convert("RGB"))
+                                images.append(_to_pil(image_resp.read(), "RGB"))
                         else:
-                            images.append(Image.open(BytesIO(base64.b64decode(output))).convert("RGB"))
+                            images.append(_to_pil(base64.b64decode(output), "RGB"))
             if not images:
                 return None, {"status": "error", "error": "DashScope 未返回图像数据", "raw": result, "model_used": model_id}
             return images, {"status": "success", "model_used": model_id, "instruction": instruction, "method": "dashscope_multimodal_generation"}
@@ -229,9 +240,7 @@ def api_image_edit_tool(image, instruction, model=None, size="auto", response_fo
                     inline_data = part.get("inlineData") or part.get("inline_data") or {}
                     output_b64 = inline_data.get("data")
                     if output_b64:
-                        images.append(
-                            Image.open(BytesIO(base64.b64decode(output_b64))).convert("RGB")
-                        )
+                        images.append(_to_pil(base64.b64decode(output_b64), "RGB"))
             if not images:
                 return None, {
                     "status": "error",
@@ -296,10 +305,10 @@ def api_image_edit_tool(image, instruction, model=None, size="auto", response_fo
                 if b64:
                     if isinstance(b64, str) and b64.startswith("data:image"):
                         b64 = b64.split(",", 1)[1]
-                    images.append(Image.open(BytesIO(base64.b64decode(b64))).convert("RGB"))
+                    images.append(_to_pil(base64.b64decode(b64), "RGB"))
                 elif item.get("url"):
                     with urllib.request.urlopen(item["url"], timeout=120) as img_resp:
-                        images.append(Image.open(BytesIO(img_resp.read())).convert("RGB"))
+                        images.append(_to_pil(img_resp.read(), "RGB"))
             if not images:
                 return None, {"status": "error", "error": "ModelScope 编辑未返回可解析图像", "raw": result, "model_used": model_id}
             return images, {"status": "success", "model_used": model_id, "instruction": instruction, "method": f"{provider or 'api'}_generations_edit"}
@@ -369,11 +378,11 @@ def api_image_edit_tool(image, instruction, model=None, size="auto", response_fo
             if b64:
                 if isinstance(b64, str) and b64.startswith("data:image"):
                     b64 = b64.split(",", 1)[1]
-                images.append(Image.open(BytesIO(base64.b64decode(b64))).convert("RGB"))
+                images.append(_to_pil(base64.b64decode(b64), "RGB"))
             elif item.get("url"):
                 try:
                     with urllib.request.urlopen(item["url"], timeout=120) as image_resp:
-                        images.append(Image.open(BytesIO(image_resp.read())).convert("RGB"))
+                        images.append(_to_pil(image_resp.read(), "RGB"))
                 except Exception as e:
                     return None, {"status": "error", "error": f"API 返回图片 URL 无法读取: {e}", "model_used": model_id}
 
@@ -423,7 +432,7 @@ def _modelscope_poll_task(base_url, api_key, task_id, task_type="image_generatio
                 if isinstance(img_url, str) and img_url.startswith("http"):
                     try:
                         with urllib.request.urlopen(img_url, timeout=60) as img_resp:
-                            images.append(Image.open(BytesIO(img_resp.read())).convert("RGB"))
+                            images.append(_to_pil(img_resp.read(), "RGB"))
                     except Exception as e:
                         print(f"[Agent] ModelScope 下载图片失败: {e}")
             if images:
@@ -578,8 +587,7 @@ def api_image_generate_tool(prompt, model=None, size="1024x1024", response_forma
             for b64_data in images_b64:
                 try:
                     img_data = base64.b64decode(b64_data)
-                    img = Image.open(BytesIO(img_data))
-                    images.append(img)
+                    images.append(_to_pil(img_data))
                 except Exception as e:
                     print(f"[Agent] Gemini 图片解码失败: {e}")
             if images:
@@ -624,7 +632,7 @@ def api_image_generate_tool(prompt, model=None, size="1024x1024", response_forma
                     inline_data = part.get("inlineData") or part.get("inline_data") or {}
                     output_b64 = inline_data.get("data")
                     if output_b64:
-                        images.append(Image.open(BytesIO(base64.b64decode(output_b64))).convert("RGB"))
+                        images.append(_to_pil(base64.b64decode(output_b64), "RGB"))
             if not images:
                 return None, {"status": "error", "error": "YoboxAI Gemini 未返回图像数据", "raw": result, "model_used": model_id}
             return images, {"status": "success", "model_used": model_id, "prompt": prompt, "method": "yoboxai_gemini_generate_content"}
@@ -686,10 +694,10 @@ def api_image_generate_tool(prompt, model=None, size="1024x1024", response_forma
             if b64:
                 if isinstance(b64, str) and b64.startswith("data:image"):
                     b64 = b64.split(",", 1)[1]
-                images.append(Image.open(BytesIO(base64.b64decode(b64))).convert("RGB"))
+                images.append(_to_pil(base64.b64decode(b64), "RGB"))
             elif item.get("url"):
                 with urllib.request.urlopen(item["url"], timeout=120) as image_resp:
-                    images.append(Image.open(BytesIO(image_resp.read())).convert("RGB"))
+                    images.append(_to_pil(image_resp.read(), "RGB"))
         if not images:
             return None, {"status": "error", "error": "API 未返回图像数据", "raw": result, "model_used": model_id}
         return images, {"status": "success", "model_used": model_id, "prompt": prompt, "method": "api_image_generate"}
@@ -923,8 +931,8 @@ def _response_to_image(data, is_b64=False):
         is_b64 = True
     if not is_b64 and value.startswith(("http://", "https://")):
         with urllib.request.urlopen(value, timeout=120) as resp:
-            return Image.open(BytesIO(resp.read())).convert("RGB")
-    return Image.open(BytesIO(base64.b64decode(value))).convert("RGB")
+            return _to_pil(resp.read(), "RGB")
+    return _to_pil(base64.b64decode(value), "RGB")
 
 
 def _dashscope_generate(base_url, api_key, model_id, prompt, size, count=1):
@@ -962,7 +970,7 @@ def _stability_generate(base_url, api_key, model_id, prompt, size, count=1):
         resp = requests.post(url, headers=headers, files={"none": (None, "")}, data=form, timeout=180)
         if resp.status_code >= 400:
             raise RuntimeError(f"Stability API HTTP {resp.status_code}: {resp.text[:300]}")
-        images.append(Image.open(BytesIO(resp.content)).convert("RGB"))
+        images.append(_to_pil(resp.content, "RGB"))
     return images, {"status": "success", "model_used": model, "prompt": prompt, "method": "stability_generate"}
 
 

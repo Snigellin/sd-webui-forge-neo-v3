@@ -334,6 +334,62 @@ def _save_pil_to_tempfile(img):
             return None
 
 
+def _guess_image_ext(raw_bytes):
+    """按魔数猜测原图扩展名，避免把 jpg/webp 写成 .png。"""
+    if not raw_bytes:
+        return "png"
+    if raw_bytes[:4] == bytes([137, 80, 78, 71]):
+        return "png"
+    if raw_bytes[:3] == bytes([255, 216, 255]):
+        return "jpg"
+    if raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WEBP":
+        return "webp"
+    if raw_bytes[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if raw_bytes[:2] == bytes([66, 77]):
+        return "bmp"
+    return "png"
+
+
+def _save_original_copy(img, kind="txt2img"):
+    """把未修改原图（原始字节直存，不重编码）另存到 Forge 标准输出目录。"""
+    try:
+        from modules import shared
+        from modules import images as forge_images
+    except Exception:
+        return None
+    try:
+        attr = "outdir_img2img_samples" if kind == "img2img" else "outdir_txt2img_samples"
+        outdir = str(getattr(shared.opts, "outdir_samples", "") or "").strip()
+        if not outdir:
+            outdir = str(getattr(shared.opts, attr, "") or "").strip()
+        if not outdir:
+            return None
+        if getattr(shared.opts, "save_to_dirs", False):
+            try:
+                pattern = getattr(shared.opts, "directories_filename_pattern", "") or "[date]"
+                sub = forge_images.namegen.apply(pattern).lstrip(" ").rstrip(chr(92) + " /")
+            except Exception:
+                sub = ""
+            if sub:
+                outdir = os.path.join(outdir, sub)
+        os.makedirs(outdir, exist_ok=True)
+        raw = (getattr(img, "info", None) or {}).get("raw_bytes")
+        filename = "agent-" + time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(4).hex() + "." + _guess_image_ext(raw)
+        path = os.path.join(outdir, filename)
+        if raw:
+            with open(path, "wb") as f:
+                f.write(raw)
+        else:
+            img.save(path, format="PNG")
+            print("[Agent] 未拿到原始字节，已按重编码方式另存原图")
+        print(f"[Agent] 原图已另存到: {path}")
+        return path
+    except Exception as e:
+        print(f"[Agent] 另存原图失败: {e}")
+        return None
+
+
 def _get_current_checkpoint():
     try:
         if hasattr(shared.opts, "sd_model_checkpoint") and shared.opts.sd_model_checkpoint:
