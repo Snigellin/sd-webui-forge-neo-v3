@@ -183,6 +183,7 @@ class LaunchWorker(QThread):
         self.config = config
         self._process = None
         self._tmp_bat_path = None  # 保存临时bat文件路径用于清理
+        self._novelai_proc = None  # NovelAI2api 网关进程
 
     def run(self):
         # 启动前清理所有残留的临时文件（防止之前异常退出导致的残留）
@@ -221,11 +222,13 @@ class LaunchWorker(QThread):
                 errors="replace",
                 creationflags=creation_flags,
             )
+            self._start_novelai()
             for line in self._process.stdout:
                 self.log_line.emit(line.rstrip())
             self._process.wait()
             self.finished.emit(self._process.returncode)
         finally:
+            self._stop_novelai()
             self._cleanup_temp_file()
 
     def _cleanup_temp_file(self):
@@ -239,9 +242,64 @@ class LaunchWorker(QThread):
             except Exception as e:
                 self.log_line.emit(f"⚠️  清理临时文件失败: {e}")
 
+    def _start_novelai(self):
+        """启动 NovelAI2api 网关（配置启用且端口空闲时）"""
+        novelai_cfg = self.config.get("novelai", {})
+        if not novelai_cfg.get("enabled", False):
+            return
+        try:
+            port = int(novelai_cfg.get("port", 18787))
+        except (TypeError, ValueError):
+            port = 18787
+        if is_port_in_use(port):
+            self.log_line.emit(f"🧠 NovelAI2api 网关已在运行 (127.0.0.1:{port})，跳过启动")
+            return
+        exe = novelai_cfg.get("path", "NovelAI2api\\server.exe")
+        if not os.path.isabs(exe):
+            exe = os.path.join(BASE_DIR, exe)
+        if not os.path.isfile(exe):
+            self.log_line.emit(f"⚠️  未找到 NovelAI2api 网关: {exe}")
+            return
+        try:
+            self._novelai_proc = subprocess.Popen(
+                [exe],
+                cwd=os.path.dirname(exe),
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            self.log_line.emit(f"🧠 NovelAI2api 网关已启动 (127.0.0.1:{port})")
+        except Exception as e:
+            self.log_line.emit(f"⚠️  NovelAI2api 网关启动失败: {e}")
+            self._novelai_proc = None
+
+    def _stop_novelai(self):
+        """停止 NovelAI2api 网关（与 WebUI 同生命周期）"""
+        if self._novelai_proc is None:
+            return
+        try:
+            import psutil
+            parent = psutil.Process(self._novelai_proc.pid)
+            for child in parent.children(recursive=True):
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            try:
+                parent.kill()
+            except Exception:
+                pass
+        except Exception:
+            try:
+                self._novelai_proc.kill()
+            except Exception:
+                pass
+        self._novelai_proc = None
+        self.log_line.emit("🛑 NovelAI2api 网关已停止")
+
     def stop(self):
         # 先清理临时文件
         self._cleanup_temp_file()
+        # 停止 NovelAI2api 网关
+        self._stop_novelai()
         
         if self._process and self._process.poll() is None:
             try:
@@ -288,6 +346,8 @@ class LaunchWorker(QThread):
     def force_kill(self):
         # 先清理临时文件
         self._cleanup_temp_file()
+        # 停止 NovelAI2api 网关
+        self._stop_novelai()
         
         if self._process and self._process.poll() is None:
             try:

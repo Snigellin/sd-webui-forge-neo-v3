@@ -41,6 +41,11 @@ DEFAULT_CONFIG = {
         "port": 8188,
         "python": "",
     },
+    "novelai": {
+        "enabled": False,
+        "port": 18787,
+        "path": "NovelAI2api\\server.exe",
+    },
     "paths": {
         "ckpt_dir": "",
         "diffusion_models_dir": "",
@@ -67,6 +72,8 @@ def load_config() -> dict:
             merged["llama"] = {**DEFAULT_CONFIG["llama"], **data.get("llama", {})}
             # deep-merge comfyui config
             merged["comfyui"] = {**DEFAULT_CONFIG["comfyui"], **data.get("comfyui", {})}
+            # deep-merge novelai config
+            merged["novelai"] = {**DEFAULT_CONFIG["novelai"], **data.get("novelai", {})}
             return merged
         except Exception:
             # 配置损坏，备份后用默认值
@@ -159,7 +166,11 @@ def _init_default_paths(config: dict) -> dict:
 
 
 def is_port_in_use(port: int) -> bool:
-    """检测端口是否被占用"""
+    """检测端口是否被占用（Windows 下监听方可复用地址，必须用连接探测）"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as c:
+        c.settimeout(0.5)
+        if c.connect_ex(("127.0.0.1", port)) == 0:
+            return True
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.bind(('0.0.0.0', port))
