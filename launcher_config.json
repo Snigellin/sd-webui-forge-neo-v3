@@ -35,6 +35,11 @@
     "port": 8188,
     "python": "C:\\AI\\sd-webui-forge-neo-v3.6.7\\ComfyUI-aki-v2.2\\python\\python.exe"
   },
+  "novelai": {
+    "enabled": true,
+    "port": 18787,
+    "path": "NovelAI2api\\server.exe"
+  },
   "paths": {
     "ckpt_dir": "webui\\models\\Stable-diffusion",
     "diffusion_models_dir": "webui\\models\\diffusion_models",
