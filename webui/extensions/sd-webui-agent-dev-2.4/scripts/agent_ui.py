@@ -12,7 +12,7 @@ from modules import shared, scripts, sd_models
 
 from scripts.agent_config import (
     load_config, save_config,
-    API_PROVIDERS, all_api_providers, provider_choices,
+    API_PROVIDERS, all_api_providers, provider_choices, image_provider_choices,
     normalize_base_url, provider_base_url,
     list_local_llm_models, detect_local_llm,
 )
@@ -406,6 +406,14 @@ _BUILTIN_API_MODEL_CHOICES = [
     ("🧩 ModelScope · Qwen-Image-2512", "ModelScope|Qwen/Qwen-Image-2512"),
     ("🧩 ModelScope · FireRed-Image-Edit", "ModelScope|FireRedTeam/FireRed-Image-Edit-1.1"),
     ("🧩 ModelScope · Qwen-Image-Edit", "ModelScope|Qwen/Qwen-Image-Edit-2511"),
+    ("🎨 NovelAI · nai-diffusion-5-full", "NovelAI|nai-diffusion-5-full"),
+    ("🎨 NovelAI · nai-diffusion-5-curated", "NovelAI|nai-diffusion-5-curated"),
+    ("🎨 NovelAI · nai-diffusion-4-5-full", "NovelAI|nai-diffusion-4-5-full"),
+    ("🎨 NovelAI · nai-diffusion-4-5-curated", "NovelAI|nai-diffusion-4-5-curated"),
+    ("🎨 NovelAI · nai-diffusion-4-full", "NovelAI|nai-diffusion-4-full"),
+    ("🎨 NovelAI · nai-diffusion-4-curated", "NovelAI|nai-diffusion-4-curated"),
+    ("🎨 NovelAI · nai-diffusion-3", "NovelAI|nai-diffusion-3"),
+    ("🎨 NovelAI · nai-diffusion-3-furry", "NovelAI|nai-diffusion-3-furry"),
     ("🎬 YoboxAI · dreamina-seedance-2-0", "video|dreamina-seedance-2-0-hc"),
     ("🎬 YoboxAI · dreamina-seedance-2-5", "video|dreamina-seedance-2-5-hc"),
     ("🎬 YoboxAI · MiniMax-H3", "video|MiniMax-H3"),
@@ -980,7 +988,7 @@ def on_ui_tabs():
                         gr.Markdown("配置图像/视频生成模型的供应商与 API Key，独立于 Agent 大脑；图像模型在首页下拉框选择。")
                         image_api_provider = gr.Dropdown(
                             label="生成 API 供应商（选择对应平台的 Key，勿混用）",
-                            choices=provider_choices(cfg_init),
+                            choices=image_provider_choices(cfg_init),
                             value=cfg_init.get("image_api_provider", "YoboxAI"),
                         )
                         with gr.Row():

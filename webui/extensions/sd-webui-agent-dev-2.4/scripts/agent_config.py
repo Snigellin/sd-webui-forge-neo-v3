@@ -73,6 +73,101 @@ API_PROVIDERS = {
     },
 }
 
+# 图像/视频生成专用预置供应商（「图像/视频生成 API 设置」下拉使用，不影响 Agent 大脑下拉）
+# compat=openai 走通用 /images/generations；compat=native 需要专用适配（当前仅列预置端点）
+IMAGE_API_PROVIDERS = {
+    "ModelScope": {
+        "base_url": "https://api-inference.modelscope.cn/v1",
+        "note": "ModelScope（魔搭）官方",
+        "compat": "openai",
+    },
+    "NovelAI": {
+        "base_url": "http://127.0.0.1:18787/v1",
+        "note": "NovelAI 官方（经本地 NovelAI2api 网关，需先启动网关；Key 填 pst- 令牌）",
+        "compat": "openai",
+    },
+    "DashScope": {
+        "base_url": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        "note": "阿里云百炼官方（非 OpenAI 兼容，编辑类走专用适配）",
+        "compat": "native",
+    },
+    "Pixapi": {
+        "base_url": "https://api.pixapi.ai/v1",
+        "note": "Pixapi.ai",
+        "compat": "openai",
+    },
+    "OpenAI": {
+        "base_url": "https://api.openai.com/v1",
+        "note": "OpenAI 官方",
+        "compat": "openai",
+    },
+    "Zhipu": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "note": "智谱（BigModel）官方",
+        "compat": "openai",
+    },
+    "Doubao": {
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "note": "豆包（火山方舟）官方",
+        "compat": "openai",
+    },
+    "Gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "note": "Google 官方（非 OpenAI 兼容，需专用适配）",
+        "compat": "native",
+    },
+    "Qianfan": {
+        "base_url": "https://qianfan.baidubce.com/v2",
+        "note": "百度千帆官方",
+        "compat": "openai",
+    },
+    "Hunyuan": {
+        "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+        "note": "腾讯混元官方",
+        "compat": "openai",
+    },
+    "Spark": {
+        "base_url": "https://spark-api-open.xf-yun.com/v1",
+        "note": "讯飞星火官方",
+        "compat": "openai",
+    },
+    "SiliconFlow": {
+        "base_url": "https://api.siliconflow.cn/v1",
+        "note": "硅基流动官方",
+        "compat": "openai",
+    },
+    "NVIDIANIM": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "note": "NVIDIA NIM 官方",
+        "compat": "openai",
+    },
+    "Stability": {
+        "base_url": "https://api.stability.ai/v2beta",
+        "note": "Stability AI 官方（非 OpenAI 兼容，需专用适配）",
+        "compat": "native",
+    },
+    "MiniMax": {
+        "base_url": "https://api.minimax.chat/v1",
+        "note": "MiniMax 官方（非 OpenAI 兼容，需专用适配）",
+        "compat": "native",
+    },
+    "Ideogram": {
+        "base_url": "https://api.ideogram.ai",
+        "note": "Ideogram 官方（非 OpenAI 兼容，需专用适配）",
+        "compat": "native",
+    },
+    "YoboxAI": {
+        "base_url": "https://api.yoboxai.com/v1",
+        "note": "第三方聚合中转（GPT Image 2 / Nano Banana / Gemini / MiniMax H3 / Dreamina）",
+        "compat": "openai",
+    },
+    "MMW": {
+        "base_url": "https://api.mmw.ink/nai/v1",
+        "note": "第三方中转（NovelAI BYOK）",
+        "compat": "openai",
+    },
+}
+
 
 def _custom_provider_map(cfg=None):
     """Return custom providers keyed by stable name, accepting old/simple entries."""
@@ -99,6 +194,13 @@ def provider_choices(cfg=None):
     return [(str(info.get("base_url") or name), name) for name, info in providers.items()]
 
 
+def image_provider_choices(cfg=None):
+    """图像/视频生成下拉：预置供应商 + 自定义供应商，标签显示「名称 · URL」。"""
+    providers = dict(IMAGE_API_PROVIDERS)
+    providers.update(_custom_provider_map(cfg))
+    return [(f"{name} · {info.get('base_url') or name}", name) for name, info in providers.items()]
+
+
 def normalize_base_url(url):
     """Normalize OpenAI-compatible base URLs."""
     value = (url or "").strip().rstrip("/")
@@ -109,7 +211,7 @@ def normalize_base_url(url):
 
 def provider_base_url(provider):
     key = str(provider or "").strip()
-    info = API_PROVIDERS.get(key)
+    info = API_PROVIDERS.get(key) or IMAGE_API_PROVIDERS.get(key)
     if info:
         return info["base_url"]
     # URL 本身也可作为供应商值，便于自定义配置直接迁移。
