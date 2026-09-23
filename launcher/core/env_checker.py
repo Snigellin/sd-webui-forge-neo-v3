@@ -4,6 +4,7 @@ import subprocess
 import sys
 import glob
 import re
+import shutil
 import ssl
 import time
 import urllib.request
@@ -105,14 +106,14 @@ def _download_installer(urls: list[str], dest: str, progress_callback=None) -> s
     raise RuntimeError(f"所有下载镜像均尝试失败（最后错误：{last_error}）")
 
 
-def _run(cmd, **kwargs) -> tuple[int, str]:
+def _run(cmd, timeout: int = 10, **kwargs) -> tuple[int, str]:
     try:
         # 添加 encoding 和 errors 参数，避免编码问题
         if 'encoding' not in kwargs:
             kwargs['encoding'] = 'utf-8'
         if 'errors' not in kwargs:
             kwargs['errors'] = 'replace'
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            creationflags=subprocess.CREATE_NO_WINDOW, **kwargs)
         return r.returncode, (r.stdout + r.stderr).strip()
     except Exception as e:
@@ -120,9 +121,14 @@ def _run(cmd, **kwargs) -> tuple[int, str]:
 
 
 def check_python() -> dict:
-    code, out = _run([PYTHON_EXE, "--version"])
+    cmd = get_python_cmd()
+    code, out = _run(cmd + ["--version"])
     ok = code == 0
-    return {"ok": ok, "version": out if ok else "未找到", "path": PYTHON_EXE}
+    path = cmd[0]
+    version = out if ok else "未找到"
+    if ok and is_system_python():
+        version = f"{out}（系统 Python）"
+    return {"ok": ok, "version": version, "path": path}
 
 
 def _find_existing_python_dir(min_version=(3, 10)):
@@ -187,6 +193,55 @@ def _find_existing_python_dir(min_version=(3, 10)):
         return None
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
+
+
+_system_python_cmd: list[str] | None = None
+_system_git_exe: str | None = None
+
+
+def _probe_python(cmd: list[str]) -> bool:
+    code, out = _run(cmd + ["--version"])
+    return code == 0 and out.strip().lower().startswith("python")
+
+
+def get_python_cmd() -> list[str]:
+    global _system_python_cmd
+    if _probe_python([PYTHON_EXE]):
+        return [PYTHON_EXE]
+    if _system_python_cmd is not None:
+        return _system_python_cmd
+
+    candidates = []
+    which_python = shutil.which("python")
+    if which_python:
+        candidates.append([which_python])
+    fallback_dir = _find_existing_python_dir()
+    if fallback_dir:
+        candidates.append([os.path.join(fallback_dir, "python.exe")])
+    py_launcher = shutil.which("py")
+    if py_launcher:
+        candidates.append([py_launcher, "-3"])
+
+    for cmd in candidates:
+        if _probe_python(cmd):
+            _system_python_cmd = cmd
+            return cmd
+
+    _system_python_cmd = [PYTHON_EXE]
+    return _system_python_cmd
+
+
+def is_system_python() -> bool:
+    return get_python_cmd()[0] != PYTHON_EXE
+
+
+def get_git_cmd() -> str:
+    global _system_git_exe
+    if os.path.isfile(GIT_EXE):
+        return GIT_EXE
+    if _system_git_exe is None:
+        _system_git_exe = shutil.which("git") or GIT_EXE
+    return _system_git_exe
 
 
 def _link_existing_python(python_dir: str, fallback_dir: str) -> tuple[bool, str]:
@@ -294,9 +349,10 @@ def ensure_python_installed(progress_callback=None) -> dict:
 
 
 def check_git() -> dict:
-    code, out = _run([GIT_EXE, "--version"])
+    git_exe = get_git_cmd()
+    code, out = _run([git_exe, "--version"])
     ok = code == 0
-    return {"ok": ok, "version": out if ok else "未找到", "path": GIT_EXE}
+    return {"ok": ok, "version": out if ok else "未找到", "path": git_exe}
 
 
 def ensure_git_installed() -> dict:
@@ -349,7 +405,7 @@ def ensure_git_installed() -> dict:
 
 def check_cuda() -> dict:
     code, out = _run(
-        [PYTHON_EXE, "-c",
+        get_python_cmd() + ["-c",
          "import torch; print(torch.__version__); print(torch.cuda.is_available()); "
          "print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"]
     )
@@ -362,27 +418,42 @@ def check_cuda() -> dict:
     return {"ok": True, "torch": torch_ver, "cuda": cuda_ok, "gpu": gpu_name}
 
 
+def _check_vram_nvidia_smi() -> dict:
+    code, out = _run(["nvidia-smi", "--query-gpu=name,memory.total",
+                      "--format=csv,noheader,nounits"])
+    if code != 0 or not out.strip():
+        return {"ok": False, "total_mb": 0, "name": "N/A"}
+    parts = [p.strip() for p in out.strip().splitlines()[0].split(",")]
+    if len(parts) < 2:
+        return {"ok": False, "total_mb": 0, "name": "N/A"}
+    try:
+        mb = int(float(parts[1]))
+    except ValueError:
+        return {"ok": False, "total_mb": 0, "name": "N/A"}
+    return {"ok": True, "total_mb": mb, "name": parts[0]}
+
+
 def check_vram() -> dict:
     code, out = _run(
-        [PYTHON_EXE, "-c",
+        get_python_cmd() + ["-c",
          "import torch; t=torch.cuda.get_device_properties(0); "
          "print(t.total_memory//1024//1024); print(t.name)"]
     )
     if code != 0:
-        return {"ok": False, "total_mb": 0, "name": "N/A"}
+        return _check_vram_nvidia_smi()
     lines = out.splitlines()
     try:
         mb = int(lines[0])
         name = lines[1] if len(lines) > 1 else "?"
         return {"ok": True, "total_mb": mb, "name": name}
     except Exception:
-        return {"ok": False, "total_mb": 0, "name": "N/A"}
+        return _check_vram_nvidia_smi()
 
 
 def check_all_gpus() -> list[dict]:
     """检测所有可用的GPU设备"""
     code, out = _run(
-        [PYTHON_EXE, "-c",
+        get_python_cmd() + ["-c",
          "import torch\n"
          "if not torch.cuda.is_available():\n"
          "    print('NO_CUDA')\n"
@@ -427,7 +498,7 @@ def get_webui_version() -> str:
             return f.read().strip()
     # 尝试从 git log 获取
     code, out = _run(
-        [GIT_EXE, "log", "--oneline", "-1"],
+        [get_git_cmd(), "log", "--oneline", "-1"],
         cwd=os.path.join(BASE_DIR, "webui")
     )
     return out[:40] if code == 0 else "未知"
@@ -604,9 +675,9 @@ def check_cuda_toolkit() -> dict:
         cuda_ver = "?"
         if code2 == 0:
             for line in out2.splitlines():
-                if "CUDA Version" in line:
+                if "CUDA Version" in line or "CUDA UMD Version" in line:
                     import re as _re
-                    m = _re.search(r"CUDA Version:\s*([\d.]+)", line)
+                    m = _re.search(r"CUDA\s+(?:UMD\s+)?Version:\s*([\d.]+)", line)
                     if m:
                         cuda_ver = m.group(1)
                     break
@@ -707,13 +778,13 @@ def check_nvidia_driver_version() -> dict:
     code2, out2 = _run(["nvidia-smi"], timeout=5)
     if code2 == 0:
         for line in out2.splitlines():
-            if "CUDA Version" in line:
-                m = re.search(r"CUDA Version:\s*([\d.]+)", line)
+            if "CUDA Version" in line or "CUDA UMD Version" in line:
+                m = re.search(r"CUDA\s+(?:UMD\s+)?Version:\s*([\d.]+)", line)
                 if m:
                     cuda_ver = m.group(1)
                 break
 
-    detail = f"GPU: {gpu}  |  驱动: {driver}  |  CUDA: {cuda_ver}  |  显存: {vram_mb//1024}GB"
+    detail = f"GPU: {gpu}  |  驱动: {driver}  |  CUDA: {cuda_ver}  |  显存: {round(vram_mb / 1024)}GB"
 
     return {
         "ok": True, "has_gpu": True,
