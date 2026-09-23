@@ -1,0 +1,4 @@
+[submodule "NovelAI2api"]
+	path = NovelAI2api
+	url = https://github.com/Snigellin/NovelAI2api.git
+	branch = main
