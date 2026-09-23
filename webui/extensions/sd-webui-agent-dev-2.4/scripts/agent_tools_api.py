@@ -629,6 +629,16 @@ def api_image_generate_tool(prompt, model=None, size="1024x1024", response_forma
                 return None, {"status": "error", "error": "YoboxAI Gemini 未返回图像数据", "raw": result, "model_used": model_id}
             return images, {"status": "success", "model_used": model_id, "prompt": prompt, "method": "yoboxai_gemini_generate_content"}
 
+        # 非 OpenAI 兼容供应商：专用适配
+        if provider == "dashscope":
+            return _dashscope_generate(base_url, api_key, model_id, prompt, size)
+        if provider == "stability":
+            return _stability_generate(base_url, api_key, model_id, prompt, size)
+        if provider == "minimax":
+            return _minimax_generate(base_url, api_key, model_id, prompt, size, negative_prompt=negative_prompt)
+        if provider == "ideogram":
+            return _ideogram_generate(base_url, api_key, model_id, prompt, size)
+
         payload = {
             "model": model_id,
             "prompt": str(prompt).strip(),
@@ -709,15 +719,13 @@ def _select_image_api_key(cfg):
 
 
 def _get_image_api_base_url(cfg, model_id=""):
-    """根据模型 ID 选择正确的 API Base URL。
+    """根据供应商与模型 ID 选择正确的 API Base URL。
 
-    YoboxAI 的 Gemini/banana 图像模型需要专用端点 https://api.yoboxai.com/gemini，
-    不能用 OpenAI 兼容的 /v1 端点。
+    YoboxAI 的 Gemini/banana 图像模型需要专用端点 https://api.yoboxai.com/gemini；
+    其他供应商（如官方 Gemini）使用各自设置里配置的 base_url。
     """
     model_lower = str(model_id or "").lower()
-    if model_lower.startswith("gemini") or model_lower.startswith("banana"):
-        # YoboxAI Gemini 专用端点
-        return "https://api.yoboxai.com/gemini"
+    provider = str(cfg.get("image_api_provider") or "").strip().lower()
     base_url = str(cfg.get("image_base_url") or "").rstrip("/")
     # 用户可能直接粘贴文档中的完整接口地址；内部统一保留 OpenAI 兼容根地址，
     # 下面的请求再追加 /images/generations。
@@ -725,6 +733,10 @@ def _get_image_api_base_url(cfg, model_id=""):
         if base_url.lower().endswith(suffix):
             base_url = base_url[: -len(suffix)].rstrip("/")
             break
+    if (model_lower.startswith("gemini") or model_lower.startswith("banana")) and (
+        provider == "yoboxai" or "yoboxai.com" in base_url.lower() or not base_url
+    ):
+        return "https://api.yoboxai.com/gemini"
     return base_url
 
 
@@ -781,8 +793,12 @@ def _call_gemini_generate(base_url, api_key, model_id, prompt_text, image_b64=No
         },
     }
 
-    # 认证方式：?key= 查询参数（YoboxAI Gemini 端点要求）
-    endpoint = f"{base_url}/v1beta/models/{model_id}:generateContent?key={api_key}"
+    # 认证方式：?key= 查询参数（官方 Gemini 与 YoboxAI Gemini 端点都接受）
+    base = base_url.rstrip("/")
+    if base.endswith("/v1beta"):
+        endpoint = f"{base}/models/{urllib.parse.quote(model_id, safe='')}:generateContent?{urllib.parse.urlencode({'key': api_key})}"
+    else:
+        endpoint = f"{base}/v1beta/models/{model_id}:generateContent?key={api_key}"
     req = urllib.request.Request(
         endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -867,3 +883,140 @@ def _format_api_http_error(e, action="调用"):
         "detail": body,
         "http_code": e.code,
     }
+
+
+# =============================================================================
+# 非 OpenAI 兼容供应商专用适配（DashScope / Stability / MiniMax / Ideogram / Gemini）
+# 参照 Forge 核心 modules_forge/api_providers.py 的同名实现移植
+# =============================================================================
+
+def _import_requests():
+    try:
+        import requests
+        return requests
+    except Exception as e:
+        raise RuntimeError(f"缺少 requests 依赖，无法调用该供应商（请安装 requirements.txt）: {e}")
+
+
+def _api_post_json(url, headers, payload, timeout=180):
+    requests = _import_requests()
+    resp = requests.post(
+        url,
+        headers=headers,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        timeout=timeout,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:400]}")
+    try:
+        return resp.json()
+    except Exception as e:
+        raise RuntimeError(f"响应解析失败: {e}: {resp.text[:300]}")
+
+
+def _response_to_image(data, is_b64=False):
+    if data is None:
+        raise RuntimeError("供应商未返回图像数据")
+    value = str(data).strip()
+    if value.startswith("data:image"):
+        value = value.split(",", 1)[-1]
+        is_b64 = True
+    if not is_b64 and value.startswith(("http://", "https://")):
+        with urllib.request.urlopen(value, timeout=120) as resp:
+            return Image.open(BytesIO(resp.read())).convert("RGB")
+    return Image.open(BytesIO(base64.b64decode(value))).convert("RGB")
+
+
+def _dashscope_generate(base_url, api_key, model_id, prompt, size, count=1):
+    """阿里云百炼（DashScope）多模态生图：output.choices[].message.content[].image"""
+    payload = {
+        "model": model_id,
+        "input": {"messages": [{"role": "user", "content": [{"text": str(prompt).strip()}]}]},
+        "parameters": {"size": str(size).replace("x", "*"), "n": max(1, int(count or 1))},
+    }
+    result = _api_post_json(
+        base_url,
+        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload,
+    )
+    images = []
+    for choice in ((result.get("output") or {}).get("choices") or []):
+        for item in ((choice.get("message") or {}).get("content") or []):
+            if item.get("image"):
+                images.append(_response_to_image(item["image"], is_b64=not str(item["image"]).startswith("http")))
+    if not images:
+        raise RuntimeError(f"DashScope 未返回图片: {str(result)[:300]}")
+    return images, {"status": "success", "model_used": model_id, "prompt": prompt, "method": "dashscope_multimodal_generation"}
+
+
+def _stability_generate(base_url, api_key, model_id, prompt, size, count=1):
+    """Stability AI v2beta：multipart 表单，响应为原始图片字节（Accept: image/*）"""
+    requests = _import_requests()
+    model = str(model_id or "ultra").strip() or "ultra"
+    aspect_ratio, _ = _pixels_to_gemini_config(size)
+    url = f"{base_url.rstrip('/')}/stable-image/generate/{model}"
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "image/*"}
+    form = {"prompt": str(prompt).strip(), "aspect_ratio": aspect_ratio, "output_format": "png"}
+    images = []
+    for _ in range(max(1, int(count or 1))):
+        resp = requests.post(url, headers=headers, files={"none": (None, "")}, data=form, timeout=180)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Stability API HTTP {resp.status_code}: {resp.text[:300]}")
+        images.append(Image.open(BytesIO(resp.content)).convert("RGB"))
+    return images, {"status": "success", "model_used": model, "prompt": prompt, "method": "stability_generate"}
+
+
+def _minimax_generate(base_url, api_key, model_id, prompt, size, count=1, negative_prompt=""):
+    """MiniMax 生图：data.image_urls / data.image_base64"""
+    aspect_ratio, _ = _pixels_to_gemini_config(size)
+    payload = {
+        "model": str(model_id or "image-01").strip() or "image-01",
+        "prompt": str(prompt).strip(),
+        "aspect_ratio": aspect_ratio,
+        "n": max(1, int(count or 1)),
+        "response_format": "url",
+    }
+    result = _api_post_json(
+        f"{base_url.rstrip('/')}/image_generation",
+        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload,
+    )
+    data = result.get("data") or {}
+    images = []
+    urls = data.get("image_urls") or ([data["image_url"]] if data.get("image_url") else [])
+    for url in urls:
+        images.append(_response_to_image(url))
+    for b64 in (data.get("image_base64") or []):
+        images.append(_response_to_image(b64, is_b64=True))
+    if not images:
+        raise RuntimeError(f"MiniMax 未返回图片: {str(result)[:300]}")
+    return images, {"status": "success", "model_used": payload["model"], "prompt": prompt, "method": "minimax_image_generation"}
+
+
+def _ideogram_generate(base_url, api_key, model_id, prompt, size, count=1):
+    """Ideogram：POST /generate，data[].data[].base64 / url"""
+    aspect_ratio, _ = _pixels_to_gemini_config(size)
+    headers = {
+        "Api-Key": api_key,
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    images = []
+    for _ in range(max(1, int(count or 1))):
+        payload = {
+            "image_request": {
+                "prompt": str(prompt).strip(),
+                "model": str(model_id or "V_2").strip() or "V_2",
+                "aspect_ratio": aspect_ratio,
+            }
+        }
+        result = _api_post_json(f"{base_url.rstrip('/')}/generate", headers, payload)
+        for block in (result.get("data") or []):
+            for item in (block.get("data") or []):
+                if item.get("base64"):
+                    images.append(_response_to_image(item["base64"], is_b64=True))
+                elif item.get("url"):
+                    images.append(_response_to_image(item["url"]))
+    if not images:
+        raise RuntimeError("Ideogram 未返回图片")
+    return images, {"status": "success", "model_used": str(model_id or "V_2"), "prompt": prompt, "method": "ideogram_generate"}
